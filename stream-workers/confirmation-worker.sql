@@ -8,7 +8,7 @@ CREATE SOURCE ConfirmationsGlobal WITH (type='stream', stream.list='Confirmation
 (settlement_id long, source_bank string, target_bank string, amount double, currency string, timestamp long, source_region string, status string, _txnID long);
 
 -- define input stream Confirmations, with expected message format from Bank B
-CREATE SINK Confirmations WITH (type='stream', stream='Confirmations', replication.type='global', map.type='json', transaction.uid.field='_txnID')
+CREATE SINK Confirmations WITH (type='stream', stream='Confirmations', replication.type='local', map.type='json', transaction.uid.field='_txnID')
 (settlement_id long, source_bank string, target_bank string, amount double, currency string, timestamp long, source_region string, status string, _txnID long);
 
 -- define internal stream ValidatedConfirmation, on which we will post validated messages
