@@ -11,3 +11,4 @@ CREATE SINK Settlements WITH (type='stream', stream='Payments', replication.type
 INSERT INTO Settlements
 SELECT str:concat("Chase_", convert(count() % 100, 'string')) as source_bank, "Fargo" as target_bank, 100.0 as amount, "USD" as currency
 FROM MyTrigger;
+

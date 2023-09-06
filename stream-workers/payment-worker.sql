@@ -8,12 +8,6 @@
 CREATE SOURCE Payments WITH (type = 'stream', stream.list = "Payments", map.type='json', transaction.uid.field='_txnID', transaction.uid.create='true')
 (source_bank string, target_bank string, amount double, currency string, _txnID long);
 
--- define internal stream PaymentWithBank which joins data from Payment stream and Banks collection
-CREATE STREAM PaymentWithBank (source_bank string, target_bank string, amount double, currency string, timestamp long, source_balance long, source_total_reserved long, source_region string, _txnID long, failedMsg string);
-
--- define internal stream ValidatedPayments, on which we will post validated messages
-CREATE STREAM ValidatedPayments (source_bank string, target_bank string, amount double, currency string, timestamp long, source_region string, _txnID long);
-
 -- define Banks collection in database, where we will store banks information
 CREATE STORE Banks WITH (type='database', replication.type="global", collection.type="doc") (uuid string, name string, balance long, reserved long, currency string, region string);
 
@@ -25,12 +19,8 @@ CREATE STORE PaymentRequests WITH (type = 'database', replication.type="global",
 CREATE SINK PayerBankConfirmations WITH (type='stream', stream='PayerBankConfirmations', replication.type='local', map.type='json')
 (_txnID long, source_bank string, target_bank string, amount double, currency string, status string, timestamp long, message string);
 
--- define Settlements stream, which will be used in Leg-2
-CREATE SINK Settlements WITH (type='stream', stream='Settlements', replication.type='local', map.type='json')
-(source_bank string, target_bank string, amount double, currency string, timestamp long, source_region string, _txnID long);
-
 -- define Settlements stream, which will be used for replication
-CREATE SINK SettlementsGlobal WITH (type='stream', stream='SettlementsGlobal', replication.type='global', map.type='json')
+CREATE SINK Settlements WITH (type='stream', stream='Settlements', replication.type='global', map.type='json')
 (source_bank string, target_bank string, amount double, currency string, timestamp long, source_region string, _txnID long);
 
 -- User Defined Functions in JavaScript that returns prpper pessage for failed response
@@ -72,7 +62,6 @@ CREATE FUNCTION validate[javascript] return string {
     }
 	return null;
 };
--- validate(b.balance, p.amount, b.reserved, b.region, context:getVar('region')) 
 
 -- QUERIES --
 
@@ -119,8 +108,3 @@ SELECT _txnID, source_bank, target_bank, amount, currency, "RJCT" as status, tim
 FROM PaymentWithBank [
     not(failedMsg is null)
 ];
-
--- replicate to remote regions
-INSERT INTO SettlementsGlobal
-SELECT source_bank, target_bank, amount, currency, timestamp, source_region, _txnID
-FROM Settlements;

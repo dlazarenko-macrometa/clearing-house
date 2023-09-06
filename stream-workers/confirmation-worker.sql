@@ -4,21 +4,8 @@
 -- DEFINITIONS --
 
 -- define input stream ConfirmationsGlobal for receiving confirmations from remote regions
-CREATE SOURCE ConfirmationsGlobal WITH (type='stream', stream.list='ConfirmationsGlobal', replication.type='global', map.type='json', transaction.uid.field='_txnID')
+CREATE SOURCE Confirmations WITH (type='stream', stream.list='Confirmations', replication.type='global', map.type='json', transaction.uid.field='_txnID')
 (settlement_id long, source_bank string, target_bank string, amount double, currency string, timestamp long, source_region string, status string, _txnID long);
-
--- define input stream Confirmations, with expected message format from Bank B
-CREATE SINK Confirmations WITH (type='stream', stream='Confirmations', replication.type='local', map.type='json', transaction.uid.field='_txnID')
-(settlement_id long, source_bank string, target_bank string, amount double, currency string, timestamp long, source_region string, status string, _txnID long);
-
--- define internal stream ValidatedConfirmation, on which we will post validated messages
-CREATE STREAM ValidatedConfirmation (settlement_id long, source_bank string, target_bank string, amount double, currency string, timestamp long, status string, _txnID long);
-
--- define internal stream ValidatedConfirmation, on which we will post validated messages
-CREATE STREAM AcceptedConfirmation (settlement_id long, source_bank string, target_bank string, amount double, currency string, timestamp long, status string, _txnID long);
-
--- define internal stream ValidatedConfirmation, on which we will post validated messages
-CREATE STREAM RejectedConfirmation (settlement_id long, source_bank string, target_bank string, amount double, currency string, timestamp long, status string, _txnID long);
 
 -- define Banks collection in database, where we will store banks information
 CREATE STORE Banks WITH (type='database', replication.type="global", collection.type="doc") (uuid string, name string,  balance long, reserved long, currency string, region string);
@@ -32,11 +19,6 @@ CREATE SINK PayerBankConfirmations WITH (type='stream', stream='PayerBankConfirm
 (source_bank string, target_bank string, amount double, currency string, timestamp long, status string, _txnID long);
 
 -- QUERIES --
-
--- replicating from remote regions
-INSERT INTO Confirmations
-SELECT *
-FROM ConfirmationsGlobal;
 
 -- the main flow 1: validate on correct region
 INSERT INTO ValidatedConfirmation

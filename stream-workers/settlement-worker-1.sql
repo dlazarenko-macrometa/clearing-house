@@ -5,21 +5,11 @@
 -- DEFINITIONS --
 
 -- define input stream Settlements, with expected message format for receiving from remote regions
-CREATE SOURCE SettlementsGlobal WITH (type='stream', stream.list='SettlementsGlobal', replication.type='global', map.type='json', transaction.uid.field='_txnID')
-(source_bank string, target_bank string, source_region string, amount double, currency string, timestamp long, _txnID long);
-
--- define input stream Settlements, with expected message format
-CREATE SINK Settlements WITH (type='stream', stream='Settlements', replication.type='local', map.type='json', transaction.uid.field='_txnID')
+CREATE SOURCE Settlements WITH (type='stream', stream.list='Settlements', replication.type='global', map.type='json', transaction.uid.field='_txnID')
 (source_bank string, target_bank string, source_region string, amount double, currency string, timestamp long, _txnID long);
 
 -- define Banks collection in database, where we will store banks information
 CREATE STORE Banks WITH (type='database', replication.type="global", collection.type="doc") (uuid string, name string,  balance long, reserved long, currency string, region string);
-
--- define internal stream SettlementWithBank which joins data from Payment stream and Banks collection
-CREATE STREAM SettlementWithBank (source_bank string, target_bank string, source_region string, target_region string, amount double, currency string, timestamp long, _txnID long);
-
--- define internal stream ValidatedSettlement which generates Settlement ID and validated messages
-CREATE STREAM ValidatedSettlement (settlement_id long, source_bank string, target_bank string, source_region string, amount double, currency string, timestamp long, status string, _txnID long);
 
 -- define Transfers stream, which will be used for sending payment requests to Bank B
 CREATE SINK Transfers WITH (type='stream', stream='Transfers', replication.type='local', map.type='json')
@@ -39,11 +29,6 @@ CREATE FUNCTION generateSettlementId[javascript] return long {
 };
 
 --- QUERIES --
-
--- replicating from remote regions 
-INSERT INTO Settlements
-SELECT source_bank, target_bank, source_region, amount, currency, timestamp, _txnID
-FROM SettlementsGlobal;
 
 -- the main flow 1: get region of Bank B, here we do not need transaction because region is fixed value.
 INSERT INTO SettlementWithBank
