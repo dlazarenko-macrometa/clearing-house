@@ -1,50 +1,27 @@
 @App:name("SettlementWorker1")
-@App:description("This app settles a payment with confirmation from Bank B")
 @App:qlVersion("2")
 
--- DEFINITIONS --
-
--- define input stream Settlements, with expected message format for receiving from remote regions
-CREATE SOURCE Settlements WITH (type='stream', stream.list='Settlements', replication.type='global', map.type='json', transaction.uid.field='_txnID')
-(source_bank string, target_bank string, source_region string, amount double, currency string, timestamp long, _txnID long);
+-- define input stream Settlements, with expected message format
+CREATE SOURCE Settlements WITH (type='stream', stream.list='Settlements', replication.type='global', subscription.name='sub1',  map.type='json', transaction.uid.field='_txnID')
+(source_bank string, target_bank string, source_region string, target_region string, amount double, currency string, timestamp long, _txnID long);
 
 -- define Banks collection in database, where we will store banks information
 CREATE STORE Banks WITH (type='database', replication.type="global", collection.type="doc") (uuid string, name string,  balance long, reserved long, currency string, region string);
 
--- define Transfers stream, which will be used for sending payment requests to Bank B
 CREATE SINK Transfers WITH (type='stream', stream='Transfers', replication.type='local', map.type='json')
 (source_bank string, target_bank string, amount double, currency string, timestamp long, _txnID long);
 
--- define Settlement collection in database, where we will store the settled requests
 CREATE STORE Settlement WITH (type = 'database', replication.type="global", collection.type="doc") 
 (settlement_id long, source_bank string, target_bank string, source_region string, amount double, currency string, timestamp long, status string, _txnID long);
 
--- User Defined Functions in JavaScript that generates settlementID, the script can be changed to any unique generation of ID
-CREATE FUNCTION generateSettlementId[javascript] return long {
-	function getRandomInt(min, max) {
-		return Math.floor(Math.random() * (max - min)) + min;
-	}
-	
-     return getRandomInt(1, 99999999);
-};
-
---- QUERIES --
-
--- the main flow 1: get region of Bank B, here we do not need transaction because region is fixed value.
-INSERT INTO SettlementWithBank
-SELECT s.source_bank, s.target_bank, s.source_region, b.region as target_region, s.amount, s.currency, s.timestamp, s._txnID
-FROM Settlements as s JOIN Banks as b
-ON s.target_bank == b.name;
-
 -- the main flow 3: check if Bank A belongs to the current region
 INSERT INTO ValidatedSettlement
-SELECT generateSettlementId() as settlement_id, source_bank, target_bank, source_region, amount, currency, timestamp, 'active' as status, _txnID
-FROM SettlementWithBank [
+SELECT convert(math:rand() * 1000000, 'long') as settlement_id, source_bank, target_bank, source_region, amount, currency, timestamp, 'active' as status, _txnID
+FROM Settlements [
     target_region == context:getVar('region')
     -- here can be added other conditions
 ];
 
--- the main flow 4: Save to Settlement collection with status `active`
 @Transaction(name='TxnSuccess', uid.field='_txnID')
 INSERT INTO Settlement
 SELECT settlement_id, source_bank, target_bank, source_region, amount, currency, timestamp, status, _txnID

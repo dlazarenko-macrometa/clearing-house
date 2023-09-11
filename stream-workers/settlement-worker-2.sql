@@ -9,11 +9,12 @@ CREATE SOURCE PayeeBankConfirmations WITH (type='stream', stream.list = 'PayeeBa
 CREATE STORE Settlement WITH (type = 'database', replication.type="global", collection.type="doc") 
 (settlement_id long, source_bank string, target_bank string, source_region string, amount double, currency string, timestamp long, status string, _txnID long);
 
--- define ConfirmationsGlobal stream, which will be used for replicating confirmations
+-- define Confirmations stream, which will be used for sending accepted payments back to Bank A
 CREATE SINK Confirmations WITH (type='stream', stream='Confirmations', replication.type='global', map.type='json')
 (settlement_id long, source_bank string, target_bank string, source_region string, amount double, currency string, timestamp long, status string, _txnID long);
 
 -- the main flow 1: Add settlement info to Payee message
+@Transaction(name='TxnSuccess', uid.field='_txnID', mode='read')
 INSERT INTO PayeeWithSettlement
 SELECT s.settlement_id, s.source_bank, s.target_bank, s.source_region, s.amount, s.currency, s.timestamp, ifThenElse(c.status == 'ACCP', 'settled', 'failed') as status, c._txnID
 FROM PayeeBankConfirmations as c JOIN Settlement as s
