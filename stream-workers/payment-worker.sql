@@ -1,15 +1,21 @@
 @App:name("PaymentWorker")
 @App:description("This app validates a payment")
 @App:qlVersion('2')
+@App:instances('1') /* change to 8 or 16*/
 
 -- DEFINITIONS --
 
+CREATE TRIGGER StartTrigger WITH (expression='start');
+
 -- define input stream Payments, with expected message format, generate transaction ID and put it into _txnID field
-CREATE SOURCE Payments WITH (type = 'stream', stream.list = "Payments", map.type='json', transaction.uid.field='_txnID')
+CREATE SOURCE Payments WITH (type = 'stream', stream.list = "Payments", map.type='json', subscription.name='sub1',  transaction.uid.field='_txnID')
 (source_bank string, target_bank string, amount double, currency string, _txnID long, timestamp long);
 
 -- define Banks collection in database, where we will store banks information
 CREATE STORE Banks WITH (type='database', replication.type="global", collection.type="doc") (_key string, uuid string, name string, balance long, reserved long, currency string, region string);
+
+-- create bank cache
+CREATE STORE BanksCache WITH (type='inMemory') (_key string, region string);
 
 -- define PaymentRequests collection in database, where we will store the payment requests
 CREATE STORE PaymentRequests WITH (type = 'database', replication.type="global", collection.type="doc")
@@ -65,13 +71,44 @@ CREATE FUNCTION validate[javascript] return string {
 
 -- QUERIES --
 
--- get payment request if exists by _txnID 
+-- load to cache
+INSERT INTO BanksCache
+SELECT b._key, b.region
+FROM StartTrigger as s JOIN Banks as b;
+
+--- Retrieve duplicate ---
+
+-- check if payment is older 5 seconds
+INSERT INTO PaymentWithIsOlder5Sec
+SELECT source_bank, target_bank, amount, currency, timestamp, _txnID, timestamp + 5000L < currentTimeMillis() as isOlder5Sec
+FROM Payments;
+
+-- if message younger than 5 seconds then retrieve transaction from memory cache
 INSERT INTO PaymentWithDuplicate
-SELECT p.source_bank, p.target_bank, p.amount, p.currency, p.timestamp, p._txnID, r._txnID as duplicate
-FROM Payments as p LEFT OUTER JOIN PaymentRequests as r
+SELECT source_bank, target_bank, amount, currency, timestamp, _txnID, ttlcache:get(convert(_txnID, 'string')) as duplicate
+FROM PaymentWithIsOlder5Sec [
+    not(isOlder5Sec)
+];
+
+-- if the message is older than 5 seconds then check the existing duplicate in the table
+INSERT INTO PaymentCheckInTable
+SELECT source_bank, target_bank, amount, currency, timestamp, _txnID
+FROM PaymentWithIsOlder5Sec [
+    isOlder5Sec
+];
+
+INSERT INTO PaymentWithDuplicateSaved
+SELECT source_bank, target_bank, amount, currency, timestamp, _txnID, ttlcache:put(convert(_txnID, 'string'), 'true', 5000L) as stub
+FROM PaymentCheckInTable;
+
+-- check if payment exists in the table by _txnID 
+INSERT INTO PaymentWithDuplicate
+SELECT p.source_bank, p.target_bank, p.amount, p.currency, p.timestamp, p._txnID, convert(r._txnID, 'string') as duplicate
+FROM PaymentWithDuplicateSaved as p LEFT OUTER JOIN PaymentRequests as r
 ON r._txnID == p._txnID;
 
--- stop processing message if it has duplicate
+
+-- check on dulicate: stop processing message if it is not null
 INSERT INTO DistinctPayment
 SELECT source_bank, target_bank, amount, currency, timestamp, _txnID
 FROM PaymentWithDuplicate [
@@ -81,12 +118,12 @@ FROM PaymentWithDuplicate [
 -- get region of Bank B, here we do not need transaction because region is fixed value.
 INSERT INTO PaymentWithTargetBank
 SELECT p.source_bank, p.target_bank, p.amount, p.currency, p.timestamp, b.region as target_region, p._txnID
-FROM DistinctPayment as p LEFT OUTER JOIN Banks as b
+FROM DistinctPayment as p LEFT OUTER JOIN BanksCache as b
 ON b._key == p.target_bank;
 
 INSERT INTO PaymentWithDevicePresentce
 SELECT source_bank, target_bank, amount, currency, timestamp, target_region, _txnID, 
-       clientPresence:consumerExists("c8locals.Transfers", "%", target_region, "production-demo_macrometa.team-_system-sub1") as isDevicePresent
+       /*clientPresence:consumerExists("c8locals.Transfers", "%", target_region, "production-demo_macrometa.team-_system-sub1")*/ true as isDevicePresent
 FROM PaymentWithTargetBank;
 
 
