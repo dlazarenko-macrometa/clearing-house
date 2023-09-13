@@ -1,14 +1,20 @@
 @App:name("ConfirmationWorker")
 @App:qlVersion("2")
+@App:instances("8")
 
 -- DEFINITIONS --
 
+CREATE TRIGGER StartTrigger WITH (expression='start');
+
 -- define input stream Confirmations, with expected message format from Bank B
-CREATE SOURCE Confirmations WITH (type='stream', stream.list='Confirmations', replication.type='global', map.type='json', transaction.uid.field='_txnID')
+CREATE SOURCE Confirmations WITH (type='stream', stream.list='Confirmations', replication.type='global', map.type='json', subscription.name='sub1', transaction.uid.field='_txnID')
 (settlement_id long, source_bank string, target_bank string, amount double, currency string, timestamp long, source_region string, status string, _txnID long);
 
 -- define Banks collection in database, where we will store banks information
 CREATE STORE Banks WITH (type='database', replication.type="global", collection.type="doc") (_key string, uuid string, name string,  balance long, reserved long, currency string, region string);
+
+-- create bank cache
+CREATE STORE BanksCache WITH (type='inMemory') (_key string, region string);
 
 -- define PaymentRequests collection in database, where we will store the accepted payments
 CREATE STORE Ledger WITH (type = 'database', replication.type="global", collection.type="doc") 
@@ -20,10 +26,21 @@ CREATE SINK PayerBankConfirmations WITH (type='stream', stream='PayerBankConfirm
 
 -- QUERIES --
 
+-- load to cache
+INSERT INTO BanksCache
+SELECT b._key, b.region
+FROM StartTrigger as s JOIN Banks as b;
+
+-- get region of Bank B, here we do not need transaction because region is fixed value.
+INSERT INTO ConfirmationsWithSourceBank
+SELECT c.settlement_id, c.source_bank, c.target_bank, c.amount, c.currency, c.timestamp, b.region as source_region, c.status, c._txnID
+FROM Confirmations as c LEFT OUTER JOIN BanksCache as b
+ON b._key == c.source_bank;
+
 -- the main flow 1: validate on correct region
 INSERT INTO ValidatedConfirmation
 SELECT settlement_id, source_bank, target_bank, amount, currency, timestamp, status, _txnID
-FROM Confirmations [
+FROM ConfirmationsWithSourceBank [
     source_region == context:getVar('region')
 ];
 

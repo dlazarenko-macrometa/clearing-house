@@ -1,5 +1,6 @@
 @App:name("SettlementWorker1")
 @App:qlVersion("2")
+@App:instances("4")
 
 -- define input stream Settlements, with expected message format
 CREATE SOURCE Settlements WITH (type='stream', stream.list='Settlements', replication.type='global', subscription.name='sub1', map.type='json')
@@ -16,7 +17,7 @@ CREATE STORE Settlement WITH (type = 'database', replication.type="global", coll
 
 -- the main flow 3: check if Bank A belongs to the current region
 INSERT INTO ValidatedSettlement
-SELECT convert(math:rand() * 99999999999L, 'long') as settlement_id, source_bank, target_bank, source_region, amount, currency, timestamp, 'active' as status, _txnID
+SELECT _txnID as settlement_id, source_bank, target_bank, source_region, amount, currency, timestamp, 'active' as status, _txnID
 FROM Settlements [
     target_region == context:getVar('region')
     -- here can be added other conditions

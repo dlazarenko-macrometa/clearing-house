@@ -1,14 +1,14 @@
 @App:name("PaymentWorker")
 @App:description("This app validates a payment")
 @App:qlVersion('2')
-@App:instances('1') /* change to 8 or 16*/
+@App:instances("8")
 
 -- DEFINITIONS --
 
 CREATE TRIGGER StartTrigger WITH (expression='start');
 
 -- define input stream Payments, with expected message format, generate transaction ID and put it into _txnID field
-CREATE SOURCE Payments WITH (type = 'stream', stream.list = "Payments", map.type='json', subscription.name='sub1',  transaction.uid.field='_txnID')
+CREATE SOURCE Payments WITH (type = 'stream', stream.list = "Payments", map.type='json', subscription.name='sub1', transaction.uid.field='_txnID')
 (source_bank string, target_bank string, amount double, currency string, _txnID long, timestamp long);
 
 -- define Banks collection in database, where we will store banks information
@@ -29,46 +29,6 @@ CREATE SINK PayerBankConfirmations WITH (type='stream', stream='PayerBankConfirm
 CREATE SINK Settlements WITH (type='stream', stream='Settlements', replication.type='global', map.type='json')
 (source_bank string, target_bank string, amount double, currency string, timestamp long, source_region string, target_region string, _txnID long);
 
--- User Defined Functions in JavaScript that returns prpper pessage for failed response
-CREATE FUNCTION validate[javascript] return string {
-    var source_bank = data[0];
-    var target_bank = data[1];
-    var source_balance = data[2];
-    var amount = data[3];
-    var source_reserved = data[4];
-    var source_region = data[5];
-    var current_region = data[6];
-    var currency = data[7];
-    if (!source_region && !source_reserved && !source_balance) {
-        return null;
-    }
-    if (!source_bank) {
-        return "Source bank parameter is not set";
-    }
-    if (source_region != current_region) {
-        return "Source bank " + source_bank + " belongs to another region";
-    }
-    if (!target_bank) {
-        return "Target bank parameter is not set";
-    }
-    if (!source_region) {
-        return "Source bank with name " + source_bank + " parameter is not set";
-    }
-    if (amount === undefined || amount === null) {
-        return "Amount parameter is not set";
-    }
-    if (amount <= 0 || amount > 100000) {
-        return "Amount of money should be more than 0 and less or equall to 10000";
-    }
-    if (!currency || currency != "USD") {
-        return "Only USD currency is acceptable";
-    }
-    if (Number(source_balance) - Number(source_reserved) < Number(amount)) {
-        return "No sufficient funds on source bank"
-    }
-    return null;
-};
-
 -- QUERIES --
 
 -- load to cache
@@ -76,39 +36,13 @@ INSERT INTO BanksCache
 SELECT b._key, b.region
 FROM StartTrigger as s JOIN Banks as b;
 
---- Retrieve duplicate ---
-
--- check if payment is older 5 seconds
-INSERT INTO PaymentWithIsOlder5Sec
-SELECT source_bank, target_bank, amount, currency, timestamp, _txnID, timestamp + 5000L < currentTimeMillis() as isOlder5Sec
-FROM Payments;
-
--- if message younger than 5 seconds then retrieve transaction from memory cache
+-- get payment request if exists by _txnID 
 INSERT INTO PaymentWithDuplicate
-SELECT source_bank, target_bank, amount, currency, timestamp, _txnID, ttlcache:get(convert(_txnID, 'string')) as duplicate
-FROM PaymentWithIsOlder5Sec [
-    not(isOlder5Sec)
-];
-
--- if the message is older than 5 seconds then check the existing duplicate in the table
-INSERT INTO PaymentCheckInTable
-SELECT source_bank, target_bank, amount, currency, timestamp, _txnID
-FROM PaymentWithIsOlder5Sec [
-    isOlder5Sec
-];
-
-INSERT INTO PaymentWithDuplicateSaved
-SELECT source_bank, target_bank, amount, currency, timestamp, _txnID, ttlcache:put(convert(_txnID, 'string'), 'true', 5000L) as stub
-FROM PaymentCheckInTable;
-
--- check if payment exists in the table by _txnID 
-INSERT INTO PaymentWithDuplicate
-SELECT p.source_bank, p.target_bank, p.amount, p.currency, p.timestamp, p._txnID, convert(r._txnID, 'string') as duplicate
-FROM PaymentWithDuplicateSaved as p LEFT OUTER JOIN PaymentRequests as r
+SELECT p.source_bank, p.target_bank, p.amount, p.currency, p.timestamp, p._txnID, r._txnID as duplicate
+FROM Payments as p LEFT OUTER JOIN PaymentRequests as r
 ON r._txnID == p._txnID;
 
-
--- check on dulicate: stop processing message if it is not null
+-- stop processing message if it has duplicate
 INSERT INTO DistinctPayment
 SELECT source_bank, target_bank, amount, currency, timestamp, _txnID
 FROM PaymentWithDuplicate [
@@ -123,7 +57,7 @@ ON b._key == p.target_bank;
 
 INSERT INTO PaymentWithDevicePresentce
 SELECT source_bank, target_bank, amount, currency, timestamp, target_region, _txnID, 
-       /*clientPresence:consumerExists("c8locals.Transfers", "%", target_region, "production-demo_macrometa.team-_system-sub1")*/ true as isDevicePresent
+       clientPresence:consumerExists("c8locals.Transfers", "%", target_region, "production-demo_macrometa.team-_system-sub1") as isDevicePresent
 FROM PaymentWithTargetBank;
 
 
@@ -144,21 +78,44 @@ FROM PaymentWithDevicePresentce [
 @Transaction(name='TxnSuccess', uid.field='_txnID', mode='read')
 -- the main flow 1: get Bank A balance from Banks account, and push it on the internal stream PaymentWithBank with a current timestamp
 INSERT INTO PaymentWithSourceBank
-SELECT p.source_bank, p.target_bank, p.amount, p.currency, p.timestamp, b.balance as source_balance, b.reserved as source_total_reserved, b.region as source_region, p.target_region, p._txnID, 
-    validate(p.source_bank, p.target_bank, b.balance, p.amount, b.reserved, b.region, context:getVar('region'), p.currency) as failedMsg
+SELECT p.source_bank, p.target_bank, p.amount, p.currency, p.timestamp, b.balance as source_balance, b.reserved as source_total_reserved, b.region as source_region, p.target_region, p._txnID 
 FROM DeviceIsPresent as p LEFT OUTER JOIN Banks as b
 ON b._key == p.source_bank;
+
+-- pre validate transaction
+INSERT INTO PaymentWithSourceBankValidated
+SELECT source_bank, target_bank, amount, currency, timestamp, source_balance, source_total_reserved, source_region, target_region, _txnID, 
+    ifThenElse(source_region IS NULL AND source_total_reserved IS NULL AND source_balance IS NULL, getNull('string'), 
+        ifThenElse(source_bank IS NULL, "Source bank parameter is not set", 
+            ifThenElse(source_region != context:getVar('region'), str:concat("Source bank ", source_bank, " belongs to another region"), 
+                ifThenElse(target_bank IS NULL, "Target bank parameter is not set", 
+                    ifThenElse(source_region IS NULL, str:concat("Source bank with name ", source_bank, " parameter is not set"), 
+                        ifThenElse(amount IS NULL, "Amount parameter is not set", 
+                            ifThenElse(amount <= 0 OR amount > 100000, "Amount of money should be more than 0 and less or equall to 100000", 
+                                ifThenElse(currency IS NULL OR currency != "USD", "Only USD currency is acceptable", 
+                                    ifThenElse(source_balance - source_total_reserved < amount, "No sufficient funds on source bank",
+                                        getNull('string')
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    ) as failedMsg
+FROM PaymentWithSourceBank;
 
 -- the main flow 2: check if Bank A belongs to the current region and it has enough balance for the requested amount, having in mind the total reserved money within the last 15 seconds 
 INSERT INTO ValidatedPayments
 SELECT source_bank, target_bank, amount, currency, timestamp, source_region, target_region, _txnID
-FROM PaymentWithSourceBank [
+FROM PaymentWithSourceBankValidated [
     failedMsg is null
 ];
 
 INSERT INTO PaymentFailed
 SELECT _txnID, source_bank, target_bank, amount, currency, timestamp, failedMsg as message
-FROM PaymentWithSourceBank [
+FROM PaymentWithSourceBankValidated [
     not(failedMsg is null)
 ];
 
