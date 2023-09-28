@@ -1,6 +1,6 @@
 @App:name("SettlementWorker2Simplified")
 @App:qlVersion("2")
-@App:instances("8")
+@App:instances("2")
 
 -- define input stream PayeeBankConfirmations, with expected message format from Bank B
 CREATE SOURCE PayeeBankConfirmations WITH (type='stream', stream.list = 'PayeeBankConfirmations', subscription.name='sub1', map.type='json', transaction.uid.field='_txnID', subscription.initial.position='Latest')
@@ -11,17 +11,16 @@ CREATE STORE Settlement WITH (type = 'database', replication.type="global", coll
 (settlement_id long, source_bank string, target_bank string, source_region string, amount double, currency string, timestamp long, status string, _txnID long);
 
 -- define Confirmations stream, which will be used for sending accepted payments back to Bank A
-CREATE SINK Confirmations WITH (type='stream', stream='Confirmations', replication.type='local', map.type='json')
+CREATE SINK Confirmations WITH (type='stream', stream='Confirmations', replication.type='global', map.type='json')
 (settlement_id long, source_bank string, target_bank string, source_region string, amount double, currency string, timestamp long, status string, _txnID long);
 
 -- the main flow 1: Add settlement info to Payee message
 INSERT INTO PayeeWithSettlement
-SELECT s.settlement_id, s.source_bank, s.target_bank, s.source_region, s.amount, s.currency, s.timestamp, ifThenElse(c.status == 'ACCP', 'settled', 'failed') as status, c._txnID
-FROM PayeeBankConfirmations as c LEFT OUTER JOIN Settlement as s
-ON c._txnID == s._txnID;
+SELECT _txnID as settlement_id, source_bank, target_bank, amount, currency, eventTimestamp() as timestamp, ifThenElse(status == 'ACCP', 'settled', 'failed') as status, _txnID
+FROM PayeeBankConfirmations;
 
 -- the main flow 2: update status of payment in Settlement collection
-@Transaction(name='TxnSuccess', uid.field='_txnID', mode='write')
+--@Transaction(name='TxnSuccess', uid.field='_txnID', mode='write')
 UPDATE Settlement
 SET Settlement.status = status
 ON Settlement._txnID == _txnID
@@ -29,7 +28,7 @@ SELECT status, _txnID
 FROM PayeeWithSettlement;
 
 -- the main flow 3: Send accepted payment to Confirmations stream 
-@Transaction(name='TxnSuccess', uid.field='_txnID')
+--@Transaction(name='TxnSuccess', uid.field='_txnID')
 INSERT INTO Confirmations
-SELECT settlement_id, source_bank, target_bank, source_region, amount, currency, timestamp, status, _txnID
+SELECT settlement_id, source_bank, target_bank, "cleaninghouse-us-west-1" as source_region, amount, currency, timestamp, status, _txnID
 FROM PayeeWithSettlement;

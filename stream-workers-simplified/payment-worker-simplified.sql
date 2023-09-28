@@ -1,7 +1,7 @@
 @App:name("PaymentWorkerSimplified")
 @App:description("This app validates a payment")
 @App:qlVersion('2')
-@App:instances('8')
+@App:instances("6")
 
 -- DEFINITIONS --
 
@@ -10,10 +10,13 @@ CREATE SOURCE Payments WITH (type = 'stream', stream.list = "Payments", subscrip
 (source_bank string, target_bank string, amount double, currency string, _txnID long);
 
 -- define Banks collection in database, where we will store banks information
-CREATE STORE Banks WITH (type='database', replication.type="global", collection.type="doc") (uuid string, name string, balance long, reserved long, currency string, region string);
+CREATE STORE Banks WITH (type='database', replication.type="global", collection.type="doc") (_key string, uuid string, name string, balance long, reserved long, currency string, region string);
+
+CREATE STORE PaymentRequests WITH (type = 'database', replication.type="global", collection.type="doc")
+(source_bank string, target_bank string, amount double, currency string, timestamp long, _txnID long);
 
 -- define Settlements stream, which will be used in Leg-2
-CREATE SINK Settlements WITH (type='stream', stream='Settlements', replication.type='local', map.type='json')
+CREATE SINK Settlements WITH (type='stream', stream='Settlements', replication.type='global', map.type='json')
 (source_bank string, target_bank string, source_region string, amount double, currency string, timestamp long, _txnID long);
  
 -- QUERIES --
@@ -22,12 +25,17 @@ CREATE SINK Settlements WITH (type='stream', stream='Settlements', replication.t
 @Transaction(name='TxnSuccess', uid.field='_txnID', mode='write')
 UPDATE Banks
 SET Banks.reserved = Banks.reserved + amount
-ON Banks.name == source_bank
+ON Banks._key == source_bank
 SELECT amount, source_bank, _txnID
+FROM Payments;
+
+@Transaction(name='TxnSuccess', uid.field='_txnID', mode='write')
+INSERT INTO PaymentRequests
+SELECT source_bank, target_bank, amount, currency, eventTimestamp() as timestamp, _txnID
 FROM Payments;
 
 -- the main flow 6: Send message to the next step (Leg-2). Transaction with name 'TxnSuccess' ends here 
 @Transaction(name='TxnSuccess', uid.field='_txnID')
 INSERT INTO Settlements
-SELECT source_bank, target_bank, "dmytro-us-west" as source_region, amount, currency, eventTimestamp() as timestamp, _txnID
+SELECT source_bank, target_bank, "cleaninghouse-us-west-1" as source_region, amount, currency, eventTimestamp() as timestamp, _txnID
 FROM Payments;
