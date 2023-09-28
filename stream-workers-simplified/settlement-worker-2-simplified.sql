@@ -15,6 +15,7 @@ CREATE SINK Confirmations WITH (type='stream', stream='Confirmations', replicati
 (settlement_id long, source_bank string, target_bank string, source_region string, amount double, currency string, timestamp long, status string, _txnID long);
 
 -- the main flow 1: Add settlement info to Payee message
+
 INSERT INTO PayeeWithSettlement
 SELECT _txnID as settlement_id, source_bank, target_bank, amount, currency, eventTimestamp() as timestamp, ifThenElse(status == 'ACCP', 'settled', 'failed') as status, _txnID
 FROM PayeeBankConfirmations;
@@ -30,5 +31,5 @@ FROM PayeeWithSettlement;
 -- the main flow 3: Send accepted payment to Confirmations stream 
 --@Transaction(name='TxnSuccess', uid.field='_txnID')
 INSERT INTO Confirmations
-SELECT settlement_id, source_bank, target_bank, "cleaninghouse-us-west-1" as source_region, amount, currency, timestamp, status, _txnID
+SELECT settlement_id, source_bank, target_bank, ifThenElse(str:contains(source_bank, "Chase"), "cleaninghouse-us-west-1" , "cleaninghouse-us-east-1" ) as source_region, amount, currency, timestamp, status, _txnID
 FROM PayeeWithSettlement;

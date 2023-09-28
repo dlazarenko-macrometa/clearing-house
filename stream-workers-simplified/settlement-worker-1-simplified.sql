@@ -17,7 +17,7 @@ CREATE STORE Settlement WITH (type = 'database', replication.type="global", coll
 
 -- 
 INSERT INTO SettlementWithBank
-SELECT source_bank, target_bank, source_region, "cleaninghouse-us-east-1" as target_region, amount, currency, timestamp, _txnID
+SELECT source_bank, target_bank, source_region, ifThenElse(str:contains(target_bank, "Chase"), "cleaninghouse-us-west-1" , "cleaninghouse-us-east-1" ) as target_region, amount, currency, timestamp, _txnID
 FROM Settlements;
 
 INSERT INTO ValidatedSettlement

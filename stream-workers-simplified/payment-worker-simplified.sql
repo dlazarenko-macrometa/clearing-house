@@ -37,5 +37,5 @@ FROM Payments;
 -- the main flow 6: Send message to the next step (Leg-2). Transaction with name 'TxnSuccess' ends here 
 @Transaction(name='TxnSuccess', uid.field='_txnID')
 INSERT INTO Settlements
-SELECT source_bank, target_bank, "cleaninghouse-us-west-1" as source_region, amount, currency, eventTimestamp() as timestamp, _txnID
+SELECT source_bank, target_bank, ifThenElse(str:contains(source_bank, "Chase"), "cleaninghouse-us-west-1" , "cleaninghouse-us-east-1") as source_region, amount, currency, eventTimestamp() as timestamp, _txnID
 FROM Payments;
