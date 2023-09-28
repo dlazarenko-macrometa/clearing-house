@@ -1,0 +1,108 @@
+#version: 1.1
+name: cleaninghouse
+peers: cleaninghouse-us-west-1
+cluster_type: single-node
+deploy_type: paas
+
+regions:
+  - us-east-1
+
+# Docker tag to be used for all service images
+image_tag: 0.18.0
+
+# When deployment images should be different uncomment the below section and add the related tags
+component_tag:
+  c8streams: yehan-dev-strm-682
+  c8cep: dmytro-txn-18.0-rev-610cc87f4603
+
+components:
+  - apisix
+  - c8db
+  - c8health
+  - c8cep
+  - c8gui
+  - c8billing
+  - c8apiserver
+  - c8collections
+  - c8streams
+  - c8apidocs
+  - c8dns
+  - c8metricservice
+  - c8metricsproxy
+  - c8auth
+  - c8faas
+
+# Node allocatable resources
+# kubectl get node -o jsonpath='{..allocatable}' | python3 -m json.tool
+#    "cpu": "32",
+#    "ephemeral-storage": "30886996Ki",  # 29.46Gi
+#    "hugepages-1Gi": "0",
+#    "hugepages-2Mi": "0",
+#    "memory": "197061052Ki",  # 187.93Gi
+#    "pods": "110"
+
+## Resource limits are part of the deploy_type preset, but
+## you can override them here if needed.
+
+resource_limits:
+  c8db:
+    coordinator:
+      memory: 7Gi
+      storage: 20Gi
+    agency:
+      memory: 0Gi
+      storage: 0Gi
+    db:
+      memory: 0Gi
+      storage: 0Gi
+  c8streams:
+    broker:
+      memory: 2Gi
+    proxy:
+      memory: 1.5Gi
+    bookkeeper:
+      memory: 2Gi
+      storage_ledgers: 20Gi
+      storage_journal: 20Gi
+    zookeeper:
+      memory: 1Gi
+      storage: 20Gi
+  c8cep:
+    memory: 3Gi
+  c8metricservice:
+    service:
+      memory: 1Gi
+    questdb:
+      memory: 1Gi
+  c8faas:
+    memory: 0.5Gi
+  c8metricsproxy:
+    memory: 1Gi
+  c8billing:
+    memory: 0.5Gi
+  c8auth :
+    memory: 0.5Gi
+  c8collections :
+    memory: 0.5Gi
+  c8health:
+    memory: 1Gi
+  apisix:
+    gateway:
+      memory:
+        limits: 900Mi
+        requests: 300Mi
+  c8dns:
+    memory: 0.5Gi
+  c8gui :
+    memory: 0.5Gi
+  c8apidocs :
+    memory: 0.5Gi
+  c8apiserver:
+    authproxy:
+      memory: 0.25Gi
+    ratelimiter:
+      memory: 0.25Gi
+
+
+    
+ 
